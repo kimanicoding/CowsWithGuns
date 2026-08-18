@@ -373,13 +373,10 @@
 </head>
 <body>
 
-    <!-- Sound/Music Toggle Button -->
     <img id="sound-toggle" src="mon.png" alt="Toggle Sound">
     
-    <!-- Pause Button -->
     <img id="pause-btn" class="hidden" src="ps.png" alt="Pause Game">
 
-    <!-- Main Title Screen -->
     <div id="main-menu-overlay" class="overlay">
         <h1>Cows with Guns</h1>
         <div class="main-menu-buttons">
@@ -388,12 +385,10 @@
         </div>
     </div>
 
-    <!-- Arena Loadout & Weapon Selection Screen -->
     <div id="arena-overlay" class="overlay hidden">
         <h1 id="loadout-header">Cows with Guns</h1>
 
         <div class="selection-container">
-            <!-- Player 1 Panel -->
             <div class="player-panel" id="p1-panel">
                 <h2 id="p1-title">Player 1 (WASD + C)</h2>
                 <div class="weapon-list" id="p1-weapons">
@@ -406,7 +401,6 @@
                 <div class="ready-status" id="p1-status">Choose Weapon</div>
             </div>
 
-            <!-- Player 2 Panel -->
             <div class="player-panel" id="p2-panel">
                 <h2 id="p2-title">Player 2 (Arrows + K)</h2>
                 <div class="weapon-list" id="p2-weapons">
@@ -425,12 +419,10 @@
         </div>
     </div>
 
-    <!-- Countdown Overlay -->
     <div id="countdown-overlay" class="overlay hidden">
         <div id="countdown-text">3</div>
     </div>
 
-    <!-- In-Game HUD -->
     <div id="hud" class="hidden">
         <div class="hud-box">
             <div class="hud-name" id="p1-name-display">Player 1</div>
@@ -464,10 +456,8 @@
         </div>
     </div>
 
-    <!-- Canvas -->
     <canvas id="gameCanvas"></canvas>
 
-    <!-- Pause Overlay -->
     <div id="pause-overlay" class="overlay hidden">
         <h2>Paused</h2>
         <div class="menu-buttons-container">
@@ -476,7 +466,6 @@
         </div>
     </div>
 
-    <!-- Victory Overlay -->
     <div id="victory-overlay" class="overlay hidden">
         <h2 id="winner-text">Player 1 Wins!</h2>
         <div class="menu-buttons-container">
@@ -1267,19 +1256,17 @@
             gameEnding = false;
         }
 
-        // --- Main Game Loop (Capped to 100 FPS) ---
-        const FPS = 100;
-        const frameInterval = 1000 / FPS;
-        let lastFrameTime = 0;
+        // --- Main Game Loop (Capped to 80 FPS) ---
+        let lastTime = 0;
+        const fps = 80;
+        const frameInterval = 1000 / fps;
 
         function gameLoop(timestamp) {
             requestAnimationFrame(gameLoop);
 
-            if (!lastFrameTime) lastFrameTime = timestamp;
-            const deltaTime = timestamp - lastFrameTime;
-
-            if (deltaTime >= frameInterval) {
-                lastFrameTime = timestamp - (deltaTime % frameInterval);
+            const elapsed = timestamp - lastTime;
+            if (elapsed >= frameInterval) {
+                lastTime = timestamp - (elapsed % frameInterval);
 
                 ctx.save();
                 
