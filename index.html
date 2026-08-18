@@ -890,222 +890,572 @@
 
                 this.maxHp = 10;
                 this.hp = 10;
-                this.facing = 'right';
+                this.facing = isPlayer1 ? 'right' : 'left';
                 
                 const weaponKey = isPlayer1 ? selections.p1.weapon : selections.p2.weapon;
                 this.weapon = WEAPONS[weaponKey] || WEAPONS.ar;
                 this.ammo = this.weapon.maxAmmo;
-                this.shootCooldown = 0;
+                
+                // Set movement speed exclusively derived from weapon mobility
+                this.speed = this.weapon.mobility || 5;
+                
+                this.cooldownTimer = 0;
+                this.hitFlashTimer = 0;
+
+                this.botJumpCooldown = 0;
+                this.botStuckTimer = 0;
+                this.lastX = x;
             }
 
             update() {
-                // Apply Gravity
-                this.vy += this.gravity;
-                this.y += this.vy;
-                this.x += this.vx;
+                let moveLeft = false;
+                let moveRight = false;
+                let jump = false;
+                let shoot = false;
 
-                // Simple floor collision bounds
-                if (this.y + this.height >= CANVAS_HEIGHT - 40) {
-                    this.y = CANVAS_HEIGHT - 40 - this.height;
-                    this.vy = 0;
-                    this.isGrounded = true;
-                    this.jumpsLeft = this.maxJumps;
+                let currentSpeed = this.speed;
+
+                if (this.isBot) {
+                    const opponent = this.isPlayer1 ? player2 : player1;
+                    let targetX = opponent.x;
+                    let dodging = false;
+                    let unsafeToJump = false;
+                    let shouldJumpToDodge = false;
+
+                    // Bullet path calculation & advanced dodging logic
+                    for (let p of projectiles) {
+                        if (p.isPlayer1Source !== this.isPlayer1) {
+                            const dist = Math.abs(p.x - this.x);
+                            const isApproaching = (p.vx > 0 && p.x < this.x) || (p.vx < 0 && p.x > this.x);
+                            
+                            if (isApproaching && dist < 350) {
+                                const timeToReach = dist / Math.abs(p.vx);
+                                const pYFuture = p.y + (p.vy * timeToReach);
+
+                                // Check if bullet trajectory intersects standing body height
+                                if (pYFuture > this.y - 15 && pYFuture < this.y + this.height + 15) {
+                                    dodging = true;
+                                    if (p.x < this.x) { moveRight = true; moveLeft = false; }
+                                    else { moveLeft = true; moveRight = false; }
+
+                                    // Safely judge if jumping will evade it (bullet is low)
+                                    if (pYFuture > this.y + this.height - 35) {
+                                        shouldJumpToDodge = true;
+                                    } else {
+                                        unsafeToJump = true; // Center-mass bullet; jumping makes it worse
+                                    }
+                                }
+
+                                // Check if a higher bullet intersects future jump arc height (~100 units up)
+                                if (pYFuture > this.y - 120 && pYFuture <= this.y - 10) {
+                                    unsafeToJump = true; 
+                                }
+                            }
+                        }
+                    }
+
+                    if (!dodging) {
+                        let closestMedKit = null;
+                        let minMedDist = Infinity;
+                        
+                        if (this.hp <= 5) {
+                            for (let mk of medKits) {
+                                let d = Math.abs(mk.x - this.x);
+                                if (d < minMedDist) { minMedDist = d; closestMedKit = mk; }
+                            }
+                        }
+
+                        let closestAmmo = null;
+                        let minAmmoDist = Infinity;
+                        
+                        if (this.ammo <= 2) {
+                            for (let ad of ammoDrops) {
+                                let d = Math.abs(ad.x - this.x);
+                                if (d < minAmmoDist) { minAmmoDist = d; closestAmmo = ad; }
+                            }
+                        }
+
+                        if (closestMedKit) targetX = closestMedKit.x;
+                        else if (closestAmmo) targetX = closestAmmo.x;
+
+                        const dx = targetX - this.x;
+                        const preferredDistance = (targetX === closestMedKit?.x || targetX === closestAmmo?.x) ? 5 : 350; 
+
+                        if (targetX === opponent.x) {
+                            if (Math.abs(dx) > preferredDistance + 40) {
+                                if (dx < 0) moveLeft = true; else moveRight = true;
+                            } else if (Math.abs(dx) < preferredDistance - 40) {
+                                if (dx < 0) moveRight = true; else moveLeft = true;
+                            }
+                        } else {
+                            if (Math.abs(dx) > 10) {
+                                if (dx < 0) moveLeft = true; else moveRight = true;
+                            }
+                        }
+
+                        if (Math.abs(dx) > 15) this.facing = dx < 0 ? 'left' : 'right';
+
+                        if ((moveLeft || moveRight) && Math.abs(this.x - this.lastX) < 0.5) this.botStuckTimer++;
+                        else this.botStuckTimer = 0;
+                        this.lastX = this.x;
+
+                        if (this.botJumpCooldown > 0) this.botJumpCooldown--;
+                        
+                        if (this.isGrounded && (this.botStuckTimer > 20 || (targetX === opponent.x && opponent.y < this.y - 60))) {
+                            if (this.botJumpCooldown <= 0 && this.jumpsLeft > 0) {
+                                jump = true;
+                                this.botJumpCooldown = 40;
+                            }
+                        }
+                    } else {
+                        if (this.botJumpCooldown > 0) this.botJumpCooldown--;
+                        
+                        if (shouldJumpToDodge && !unsafeToJump && this.isGrounded && this.botJumpCooldown <= 0) {
+                            jump = true;
+                            this.botJumpCooldown = 40;
+                        }
+                    }
+
+                    // Enforce absolute safety condition before permitting any jump
+                    if (jump && unsafeToJump) {
+                        jump = false;
+                    }
+
+                    const botCenterX = this.x + this.width / 2;
+                    const botCenterY = this.y + this.height / 2;
+                    const oppCenterX = opponent.x + opponent.width / 2;
+                    const oppCenterY = opponent.y + opponent.height / 2;
+
+                    const dxOpp = opponent.x - this.x;
+                    if (Math.abs(dxOpp) > 0) this.facing = dxOpp < 0 ? 'left' : 'right';
+
+                    const hasClearSight = hasLineOfSight(botCenterX, botCenterY, oppCenterX, oppCenterY);
+                    if (hasClearSight && this.ammo > 0) shoot = true;
+
+                    if (this.weapon === WEAPONS.lmg && shoot) currentSpeed *= (1 - WEAPONS.lmg.movementPenalty);
+
                 } else {
+                    const isFiring = this.isPlayer1 ? keys['KeyC'] : (keys['KeyK'] || keys['KeyC']);
+                    if (this.weapon === WEAPONS.lmg && isFiring) {
+                        currentSpeed *= (1 - WEAPONS.lmg.movementPenalty);
+                    }
+
+                    if (this.isPlayer1) {
+                        moveLeft = keys['KeyA'];
+                        moveRight = keys['KeyD'];
+                        jump = keys['KeyW'];
+                        shoot = keys['KeyC'];
+                    } else {
+                        moveLeft = keys['ArrowLeft'] || (isBotMode && keys['KeyA']);
+                        moveRight = keys['ArrowRight'] || (isBotMode && keys['KeyD']);
+                        jump = keys['ArrowUp'] || (isBotMode && keys['KeyW']);
+                        shoot = keys['KeyK'] || (isBotMode && keys['KeyC']);
+                    }
+                }
+
+                if (moveLeft) {
+                    this.vx = -currentSpeed;
+                    this.facing = 'left';
+                } else if (moveRight) {
+                    this.vx = currentSpeed;
+                    this.facing = 'right';
+                } else {
+                    this.vx *= 0.8;
+                }
+
+                const jumpPressed = jump && !this.prevJumpKey;
+                this.prevJumpKey = jump;
+
+                if (jumpPressed && this.jumpsLeft > 0) {
+                    this.vy = this.jumpForce;
                     this.isGrounded = false;
+                    this.jumpsLeft--;
                 }
 
-                // Wall bounds
-                if (this.x < 0) this.x = 0;
-                if (this.x + this.width > CANVAS_WIDTH) this.x = CANVAS_WIDTH - this.width;
+                this.vy += this.gravity;
 
-                // Movement processing
-                this.vx = 0;
+                this.x += this.vx;
+                this.resolveXCollisions();
+
+                this.y += this.vy;
+                this.isGrounded = false;
+                this.resolveYCollisions();
+
+                if (this.x < 0) { this.x = 0; this.vx = 0; }
+                if (this.x + this.width > CANVAS_WIDTH) { this.x = CANVAS_WIDTH - this.width; this.vx = 0; }
+                if (this.y < 0) { this.y = 0; this.vy = 0; }
+                if (this.y > CANVAS_HEIGHT + 200) this.hp = 0;
+
+                if (this.cooldownTimer > 0) this.cooldownTimer--;
+
+                if (shoot && this.cooldownTimer === 0 && this.ammo > 0) {
+                    this.fireWeapon();
+                }
+
+                if (this.hitFlashTimer > 0) this.hitFlashTimer--;
+            }
+
+            fireWeapon() {
+                this.cooldownTimer = this.weapon.cooldown;
+                this.ammo--;
+                playShootSound(this.weapon.key);
                 
-                if (this.isPlayer1 && !this.isBot) {
-                    if (keys['KeyA']) { this.vx = -this.weapon.mobility; this.facing = 'left'; }
-                    if (keys['KeyD']) { this.vx = this.weapon.mobility; this.facing = 'right'; }
-                    if (keys['KeyW'] && !this.prevJumpKey && this.jumpsLeft > 0) {
-                        this.vy = this.jumpForce;
-                        this.jumpsLeft--;
-                    }
-                    this.prevJumpKey = keys['KeyW'];
-                    
-                    if (keys['KeyC'] && this.shootCooldown <= 0 && this.ammo > 0) {
-                        this.shoot();
-                    }
-                } 
-                else if (this.isBot) {
-                    // Extremely Simple Bot AI
-                    let target = player2; // Bot is typically player 1 when active, chasing p2
-                    if (target.x < this.x) { this.vx = -this.weapon.mobility; this.facing = 'left'; }
-                    else { this.vx = this.weapon.mobility; this.facing = 'right'; }
-                    
-                    if (Math.random() < 0.02 && this.jumpsLeft > 0) {
-                        this.vy = this.jumpForce;
-                        this.jumpsLeft--;
-                    }
-
-                    if (Math.random() < 0.05 && this.shootCooldown <= 0 && this.ammo > 0) {
-                        this.shoot();
-                    }
-                } 
-                else {
-                    // Player 2 controls
-                    if (keys['ArrowLeft']) { this.vx = -this.weapon.mobility; this.facing = 'left'; }
-                    if (keys['ArrowRight']) { this.vx = this.weapon.mobility; this.facing = 'right'; }
-                    if (keys['ArrowUp'] && !this.prevJumpKey && this.jumpsLeft > 0) {
-                        this.vy = this.jumpForce;
-                        this.jumpsLeft--;
-                    }
-                    this.prevJumpKey = keys['ArrowUp'];
-                    
-                    if (keys['KeyK'] && this.shootCooldown <= 0 && this.ammo > 0) {
-                        this.shoot();
-                    }
+                if (this.weapon === WEAPONS.sniper) {
+                    screenShakeTimer = 30; screenShakeMagnitude = 19.2;
+                } else if (this.weapon === WEAPONS.shotgun) {
+                    screenShakeTimer = 24; screenShakeMagnitude = 12;
+                } else {
+                    screenShakeTimer = 20; screenShakeMagnitude = 7.2;
                 }
 
-                if (this.shootCooldown > 0) {
-                    this.shootCooldown--;
+                const spawnX = this.facing === 'right' ? this.x + this.width + 5 : this.x - 15;
+                const spawnY = this.y + this.height / 2 - 5;
+                const dir = this.facing === 'right' ? 1 : -1;
+
+                if (this.weapon === WEAPONS.shotgun) {
+                    for (let i = 0; i < this.weapon.pellets; i++) {
+                        const angleSpread = (i - 1) * this.weapon.spread;
+                        projectiles.push(new Projectile(spawnX, spawnY, dir * this.weapon.speed, angleSpread * this.weapon.speed, this.weapon.damage, this.isPlayer1, this.weapon.key));
+                    }
+                } else {
+                    projectiles.push(new Projectile(spawnX, spawnY, dir * this.weapon.speed, 0, this.weapon.damage, this.isPlayer1, this.weapon.key));
                 }
             }
 
-            shoot() {
-                this.ammo--;
-                this.shootCooldown = this.weapon.cooldown;
-                playShootSound(this.weapon.key);
-                
-                const dir = this.facing === 'right' ? 1 : -1;
-                
-                // Handle Shotgun Spread vs Single Projectiles
-                if (this.weapon.key === 'shotgun') {
-                    for(let i = 0; i < this.weapon.pellets; i++) {
-                        let spreadVy = (Math.random() - 0.5) * 10 * this.weapon.spread;
-                        projectiles.push({
-                            x: this.facing === 'right' ? this.x + this.width : this.x - 10,
-                            y: this.y + this.height / 2 - 5,
-                            vx: dir * this.weapon.speed,
-                            vy: spreadVy,
-                            damage: this.weapon.damage,
-                            color: this.weapon.color,
-                            owner: this
-                        });
+            resolveXCollisions() {
+                for (let p of platforms) {
+                    if (this.checkCollision(p)) {
+                        if (this.vx > 0) this.x = p.x - this.width;
+                        else if (this.vx < 0) this.x = p.x + p.width;
                     }
-                } else {
-                    projectiles.push({
-                        x: this.facing === 'right' ? this.x + this.width : this.x - 10,
-                        y: this.y + this.height / 2 - 5,
-                        vx: dir * this.weapon.speed,
-                        vy: 0,
-                        damage: this.weapon.damage,
-                        color: this.weapon.color,
-                        owner: this
-                    });
                 }
+            }
+
+            resolveYCollisions() {
+                for (let p of platforms) {
+                    if (this.checkCollision(p)) {
+                        if (this.vy > 0) {
+                            this.y = p.y - this.height;
+                            this.vy = 0;
+                            this.isGrounded = true;
+                            this.jumpsLeft = this.maxJumps;
+                        } else if (this.vy < 0) {
+                            this.y = p.y + p.height;
+                            this.vy = 0;
+                        }
+                    }
+                }
+            }
+
+            checkCollision(p) {
+                return this.x < p.x + p.width && this.x + this.width > p.x &&
+                       this.y < p.y + p.height && this.y + this.height > p.y;
             }
 
             draw() {
-                // Use sprite if ready, otherwise fallback to rectangles
-                if (assetsReady) {
-                    let img = this.facing === 'right' ? assets.pmr : assets.pml;
-                    if (this.isPlayer1) img = this.facing === 'right' ? assets.p1_sprites : assets.p1l;
-                    ctx.drawImage(img, this.x, this.y, this.width, this.height);
+                if (this.hp <= 0) return;
+
+                ctx.save();
+                if (this.hitFlashTimer > 0) {
+                    ctx.shadowColor = '#ff0000'; ctx.shadowBlur = 25;
+                    ctx.filter = 'drop-shadow(0px 0px 12px red) brightness(150%) sepia(100%) saturate(500%) hue-rotate(-50deg)';
+                }
+
+                let imgToDraw = null;
+                let flip = false;
+                const isMoving = Math.abs(this.vx) > 0.5;
+
+                if (isMoving) {
+                    if (this.facing === 'right') imgToDraw = assets.pmr;
+                    else imgToDraw = assets.pml;
                 } else {
-                    ctx.fillStyle = this.isPlayer1 ? '#3498db' : '#e74c3c';
-                    ctx.fillRect(this.x, this.y, this.width, this.height);
+                    if (this.facing === 'left') imgToDraw = assets.p1l;
+                    else { imgToDraw = assets.p1l; flip = true; }
+                }
+
+                if (assetsReady && imgToDraw && imgToDraw.complete && imgToDraw.naturalWidth !== 0) {
+                    if (!flip) ctx.drawImage(imgToDraw, this.x, this.y, this.width, this.height);
+                    else {
+                        ctx.save();
+                        ctx.translate(this.x + this.width / 2, this.y + this.height / 2);
+                        ctx.scale(-1, 1);
+                        ctx.drawImage(imgToDraw, -this.width / 2, -this.height / 2, this.width, this.height);
+                        ctx.restore();
+                    }
+                } else {
+                    ctx.fillStyle = this.isPlayer1 ? '#ffffff' : '#f0f0f0';
+                    ctx.fillRect(this.x, this.y + 15, this.width, this.height - 15);
+                    ctx.fillStyle = '#222';
+                    ctx.fillRect(this.x + 10, this.y + 25, 15, 15);
+                    ctx.fillRect(this.x + 35, this.y + 40, 12, 12);
+                    ctx.fillStyle = this.isPlayer1 ? '#fff' : '#eee';
+                    let headX = this.facing === 'right' ? this.x + this.width - 15 : this.x - 10;
+                    ctx.fillRect(headX, this.y, 25, 25);
+                    ctx.fillStyle = '#444';
+                    let gunX = this.facing === 'right' ? headX + 20 : headX - 25;
+                    ctx.fillRect(gunX, this.y + 12, 30, 8);
+                }
+                ctx.restore();
+
+                const barWidth = 60; const barHeight = 8;
+                const barX = this.x + (this.width - barWidth) / 2; const barY = this.y - 18;
+
+                ctx.fillStyle = 'rgba(0,0,0,0.5)';
+                ctx.fillRect(barX, barY, barWidth, barHeight);
+                ctx.fillStyle = '#2ecc71';
+                ctx.fillRect(barX, barY, barWidth * (Math.max(0, this.hp) / this.maxHp), barHeight);
+                ctx.strokeStyle = '#000';
+                ctx.strokeRect(barX, barY, barWidth, barHeight);
+
+                ctx.fillStyle = 'white'; ctx.font = 'bold 14px Segoe UI'; ctx.textAlign = 'center';
+                let label = this.isBot ? 'Bot' : (isBotMode && !this.isPlayer1 ? 'Player' : (this.isPlayer1 ? 'Player 1' : 'Player 2'));
+                ctx.fillText(label, this.x + this.width / 2, this.y - 26);
+            }
+        }
+
+        class Projectile {
+            constructor(x, y, vx, vy, damage, isPlayer1Source, weaponKey) {
+                this.x = x;
+                this.y = y;
+                this.vx = vx;
+                this.vy = vy;
+                this.damage = damage;
+                this.isPlayer1Source = isPlayer1Source;
+                this.weaponKey = weaponKey;
+                this.radius = 5;
+            }
+
+            update() {
+                this.x += this.vx;
+                this.y += this.vy;
+            }
+
+            draw() {
+                if (this.weaponKey === 'shotgun') {
+                    // Circular Bullets specifically for Shotguns
+                    ctx.fillStyle = this.isPlayer1Source ? '#ffcc00' : '#00ffff';
+                    ctx.beginPath();
+                    ctx.arc(this.x, this.y, this.radius, 0, Math.PI * 2);
+                    ctx.fill();
+                } else {
+                    // Yellow Rectangular Tracer Bullets for all other guns
+                    ctx.fillStyle = '#ffff00';
+                    ctx.fillRect(this.x - 7, this.y - 2, 14, 4);
                 }
             }
         }
 
         function initGame() {
-            player1 = new Player(150, CANVAS_HEIGHT - 120, true, isBotMode); // If BotMode, P1 is the bot
-            player2 = new Player(CANVAS_WIDTH - 210, CANVAS_HEIGHT - 120, false, false);
+            platforms = [
+                { x: 0, y: 640, width: CANVAS_WIDTH, height: 80 },
+                { x: 200, y: 540, width: 120, height: 100 },
+                { x: 960, y: 540, width: 120, height: 100 },
+                { x: 180, y: 430, width: 280, height: 20 },
+                { x: 820, y: 430, width: 280, height: 20 },
+                { x: 440, y: 300, width: 400, height: 20 },
+                { x: 180, y: 170, width: 280, height: 20 },
+                { x: 820, y: 170, width: 280, height: 20 }
+            ];
+
+            player1 = new Player(80, 570, true, isBotMode);
+            player2 = new Player(1140, 570, false, false);
             projectiles = [];
-            platforms = []; // Empty for basic flat terrain, add rectangles here for jumping platforms
+            ammoDrops = [];
+            medKits = [];
+            ammoDropTimer = 0;
+            medKitTimer = 0;
+            gameEnding = false;
         }
 
-        function updateHUD() {
-            document.getElementById('p1-hp-bar-fill').style.width = Math.max(0, (player1.hp / player1.maxHp) * 100) + '%';
-            document.getElementById('p1-hp-text').innerText = Math.max(0, Math.ceil(player1.hp));
-            document.getElementById('p1-ammo-text').innerText = player1.ammo;
-
-            document.getElementById('p2-hp-bar-fill').style.width = Math.max(0, (player2.hp / player2.maxHp) * 100) + '%';
-            document.getElementById('p2-hp-text').innerText = Math.max(0, Math.ceil(player2.hp));
-            document.getElementById('p2-ammo-text').innerText = player2.ammo;
-        }
-
-        // --- 60 FPS Throttling ---
-        const FPS = 60;
-        const frameInterval = 1000 / FPS; 
+        // --- Main Game Loop (Capped to 100 FPS) ---
+        const FPS = 100;
+        const frameInterval = 1000 / FPS;
         let lastFrameTime = 0;
 
         function gameLoop(timestamp) {
-            // Keep requesting frames
             requestAnimationFrame(gameLoop);
 
-            // Initialize time on first frame
             if (!lastFrameTime) lastFrameTime = timestamp;
             const deltaTime = timestamp - lastFrameTime;
 
-            // Only update logic if enough time has passed (~16.67ms)
             if (deltaTime >= frameInterval) {
-                // Adjust timestamp to account for slight delays without drifting
                 lastFrameTime = timestamp - (deltaTime % frameInterval);
 
-                if (currentState === STATES.PLAYING) {
-                    ctx.clearRect(0, 0, CANVAS_WIDTH, CANVAS_HEIGHT);
-                    
-                    // Draw Background
-                    if (assetsReady) {
-                        ctx.drawImage(assets.bg, 0, 0, CANVAS_WIDTH, CANVAS_HEIGHT);
-                    } else {
-                        ctx.fillStyle = '#222';
-                        ctx.fillRect(0, 0, CANVAS_WIDTH, CANVAS_HEIGHT);
-                    }
+                ctx.save();
+                
+                if (screenShakeTimer > 0 && currentState === STATES.PLAYING) {
+                    const offsetX = (Math.random() - 0.5) * screenShakeMagnitude;
+                    const offsetY = (Math.random() - 0.5) * screenShakeMagnitude;
+                    ctx.translate(offsetX, offsetY);
+                    screenShakeTimer--;
+                }
 
-                    // Update & Draw Players
+                ctx.clearRect(0, 0, CANVAS_WIDTH, CANVAS_HEIGHT);
+
+                if (assetsReady && assets.bg.complete && assets.bg.naturalWidth !== 0) {
+                    ctx.drawImage(assets.bg, 0, 0, CANVAS_WIDTH, CANVAS_HEIGHT);
+                } else {
+                    const gradient = ctx.createLinearGradient(0, 0, 0, CANVAS_HEIGHT);
+                    gradient.addColorStop(0, '#4a90e2'); gradient.addColorStop(0.7, '#87ceeb'); gradient.addColorStop(1, '#557a2b');
+                    ctx.fillStyle = gradient; ctx.fillRect(0, 0, CANVAS_WIDTH, CANVAS_HEIGHT);
+                    ctx.fillStyle = '#ffeb3b'; ctx.beginPath(); ctx.arc(1100, 120, 60, 0, Math.PI * 2); ctx.fill();
+                    ctx.fillStyle = '#3b5323'; ctx.beginPath(); ctx.moveTo(0, 640); ctx.lineTo(0, 450); ctx.quadraticCurveTo(300, 350, 600, 450); ctx.quadraticCurveTo(950, 320, CANVAS_WIDTH, 500); ctx.lineTo(CANVAS_WIDTH, 640); ctx.fill();
+                }
+
+                if (currentState === STATES.PLAYING) {
                     player1.update();
                     player2.update();
-                    player1.draw();
-                    player2.draw();
+                    
+                    ammoDropTimer++;
+                    if (ammoDropTimer >= 240) { 
+                        let plat = platforms[Math.floor(Math.random() * platforms.length)];
+                        let itemWidth = 30; let itemHeight = 30;
+                        let dropX = plat.x + Math.random() * (plat.width - itemWidth);
+                        let dropY = plat.y - itemHeight; 
+                        ammoDrops.push({x: dropX, y: dropY, w: itemWidth, h: itemHeight});
+                        ammoDropTimer = 0;
+                    }
+                    
+                    for (let i = ammoDrops.length - 1; i >= 0; i--) {
+                        let drop = ammoDrops[i];
+                        if (assetsReady && assets.bt.complete && assets.bt.naturalWidth !== 0) {
+                            ctx.drawImage(assets.bt, drop.x, drop.y, drop.w, drop.h);
+                        } else {
+                            ctx.fillStyle = '#0f0'; ctx.fillRect(drop.x, drop.y, drop.w, drop.h);
+                        }
 
-                    // Update & Draw Projectiles
-                    for (let i = projectiles.length - 1; i >= 0; i--) {
-                        let p = projectiles[i];
-                        p.x += p.vx;
-                        p.y += p.vy;
-                        
-                        ctx.fillStyle = p.color || '#ffcc00';
-                        ctx.fillRect(p.x, p.y, 14, 6);
-
-                        // Basic Hit Detection
-                        let target = p.owner === player1 ? player2 : player1;
-                        if (p.x < target.x + target.width && p.x + 14 > target.x &&
-                            p.y < target.y + target.height && p.y + 6 > target.y) {
-                            
-                            target.hp -= p.damage;
-                            projectiles.splice(i, 1);
-                            
-                            // Check for victory
-                            if (target.hp <= 0) {
-                                currentState = STATES.VICTORY;
-                                document.getElementById('victory-overlay').classList.remove('hidden');
-                                document.getElementById('winner-text').innerText = (target === player2 ? 'Player 1' : 'Player 2') + ' Wins!';
-                                document.getElementById('pause-btn').classList.add('hidden');
-                                playDeathSound();
-                            }
-                        } 
-                        // Remove off-screen projectiles
-                        else if (p.x < 0 || p.x > CANVAS_WIDTH || p.y < 0 || p.y > CANVAS_HEIGHT) {
-                            projectiles.splice(i, 1);
+                        if (player1.x < drop.x + drop.w && player1.x + player1.width > drop.x && player1.y < drop.y + drop.h && player1.y + player1.height > drop.y) {
+                            player1.ammo = Math.min(player1.weapon.maxAmmo, player1.ammo + player1.weapon.dropAmount);
+                            ammoDrops.splice(i, 1);
+                            continue;
+                        }
+                        if (player2.x < drop.x + drop.w && player2.x + player2.width > drop.x && player2.y < drop.y + drop.h && player2.y + player2.height > drop.y) {
+                            player2.ammo = Math.min(player2.weapon.maxAmmo, player2.ammo + player2.weapon.dropAmount);
+                            ammoDrops.splice(i, 1);
                         }
                     }
 
-                    updateHUD();
+                    medKitTimer++;
+                    if (medKitTimer >= 360) {
+                        let plat = platforms[Math.floor(Math.random() * platforms.length)];
+                        let medWidth = 26; let medHeight = 26;
+                        let dropX = plat.x + Math.random() * (plat.width - medWidth);
+                        let dropY = plat.y - medHeight;
+                        medKits.push({x: dropX, y: dropY, w: medWidth, h: medHeight});
+                        medKitTimer = 0;
+                    }
+
+                    for (let i = medKits.length - 1; i >= 0; i--) {
+                        let mk = medKits[i];
+                        ctx.fillStyle = '#d32f2f'; ctx.fillRect(mk.x, mk.y, mk.w, mk.h);
+                        ctx.fillStyle = '#ffffff'; ctx.fillRect(mk.x + 10, mk.y + 4, 6, 18); ctx.fillRect(mk.x + 4, mk.y + 10, 18, 6);
+
+                        if (player1.x < mk.x + mk.w && player1.x + player1.width > mk.x && player1.y < mk.y + mk.h && player1.y + player1.height > mk.y) {
+                            player1.hp = Math.min(10, player1.hp + 2);
+                            medKits.splice(i, 1);
+                            continue;
+                        }
+                        if (player2.x < mk.x + mk.w && player2.x + player2.width > mk.x && player2.y < mk.y + mk.h && player2.y + player2.height > mk.y) {
+                            player2.hp = Math.min(10, player2.hp + 2);
+                            medKits.splice(i, 1);
+                        }
+                    }
+
+                    for (let i = projectiles.length - 1; i >= 0; i--) {
+                        let p = projectiles[i];
+                        p.update();
+
+                        if (p.x < 0 || p.x > CANVAS_WIDTH || p.y < 0 || p.y > CANVAS_HEIGHT) {
+                            projectiles.splice(i, 1);
+                            continue;
+                        }
+
+                        let hitPlatform = false;
+                        for (let plat of platforms) {
+                            if (p.x > plat.x && p.x < plat.x + plat.width && p.y > plat.y && p.y < plat.y + plat.height) { hitPlatform = true; break; }
+                        }
+                        if (hitPlatform) { projectiles.splice(i, 1); continue; }
+
+                        let target = p.isPlayer1Source ? player2 : player1;
+                        if (p.x > target.x && p.x < target.x + target.width && p.y > target.y && p.y < target.y + target.height) {
+                            target.hp -= p.damage; target.hitFlashTimer = 15;
+                            target.vx += (p.isPlayer1Source ? 4 : -4); target.vy -= 2;
+                            projectiles.splice(i, 1);
+
+                            if (target.hp <= 0 && !gameEnding) {
+                                gameEnding = true;
+                                winnerName = isBotMode ? (p.isPlayer1Source ? 'Bot' : 'Player') : (p.isPlayer1Source ? 'Player 1' : 'Player 2');
+                                currentState = STATES.VICTORY;
+                                playDeathSound();
+                                if (isAudioOn) {
+                                    bgmAudio.currentTime = 0;
+                                    setTimeout(() => {
+                                        if (isAudioOn && currentState !== STATES.MAIN_MENU) bgmAudio.play().catch(e => console.log(e));
+                                    }, 1000);
+                                }
+                                setTimeout(() => { triggerVictory(winnerName); }, 2000);
+                            }
+                        }
+                    }
                 }
+
+                const p1NameStr = isBotMode ? "BOT" : "Player 1";
+                const p2NameStr = isBotMode ? "PLAYER" : "Player 2";
+                
+                document.getElementById('p1-name-display').textContent = p1NameStr;
+                document.getElementById('p2-name-display').textContent = p2NameStr;
+
+                const p1Hp = Math.max(0, player1 ? player1.hp : 10);
+                const p2Hp = Math.max(0, player2 ? player2.hp : 10);
+
+                document.getElementById('p1-hp-text').textContent = Math.ceil(p1Hp);
+                document.getElementById('p2-hp-text').textContent = Math.ceil(p2Hp);
+
+                document.getElementById('p1-hp-bar-fill').style.width = Math.max(0, (p1Hp / 10) * 100) + '%';
+                document.getElementById('p2-hp-bar-fill').style.width = Math.max(0, (p2Hp / 10) * 100) + '%';
+
+                document.getElementById('p1-ammo-text').textContent = player1 ? player1.ammo : 0;
+                document.getElementById('p2-ammo-text').textContent = player2 ? player2.ammo : 0;
+
+                if (platforms) {
+                    platforms.forEach(plat => {
+                        ctx.fillStyle = '#2b2b2b'; ctx.fillRect(plat.x, plat.y, plat.width, plat.height);
+                        ctx.strokeStyle = '#181818'; ctx.lineWidth = 2; ctx.strokeRect(plat.x, plat.y, plat.width, plat.height);
+                    });
+                }
+
+                if (projectiles && currentState !== STATES.PAUSED) projectiles.forEach(p => p.draw());
+
+                if (currentState === STATES.COUNTDOWN || currentState === STATES.PLAYING || currentState === STATES.VICTORY || currentState === STATES.PAUSED) {
+                    if (player1) player1.draw();
+                    if (player2) player2.draw();
+                    
+                    if (ammoDrops) {
+                        ammoDrops.forEach(drop => {
+                            if (assetsReady && assets.bt.complete && assets.bt.naturalWidth !== 0) ctx.drawImage(assets.bt, drop.x, drop.y, drop.w, drop.h);
+                            else { ctx.fillStyle = '#0f0'; ctx.fillRect(drop.x, drop.y, drop.w, drop.h); }
+                        });
+                    }
+                    if (medKits) {
+                        medKits.forEach(mk => {
+                            ctx.fillStyle = '#d32f2f'; ctx.fillRect(mk.x, mk.y, mk.w, mk.h);
+                            ctx.fillStyle = '#ffffff'; ctx.fillRect(mk.x + 10, mk.y + 4, 6, 18); ctx.fillRect(mk.x + 4, mk.y + 10, 18, 6);
+                        });
+                    }
+                }
+
+                ctx.restore();
             }
         }
 
-        // Start the continuous rendering loop
+        function triggerVictory(winnerText) {
+            document.getElementById('hud').classList.add('hidden');
+            document.getElementById('pause-btn').classList.add('hidden');
+            document.getElementById('sound-toggle').classList.remove('hidden');
+            document.getElementById('winner-text').textContent = `${winnerText} Wins!`;
+            document.getElementById('victory-overlay').classList.remove('hidden');
+        }
+
         requestAnimationFrame(gameLoop);
     </script>
 </body>
